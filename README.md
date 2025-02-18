@@ -8,9 +8,9 @@
 
 ## 运行方法
 
-**环境：**PHP 7
+环境：PHP 7
 
-**命令：**php -S 0.0.0.0:9383
+命令：php -S 0.0.0.0:9383
 
 ![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F45.png)
 
