@@ -100,5 +100,6 @@ $SinkAll = array_merge(
     $EXEC,
     $INCLUDE,
     $CODE,
-    $UNSERIALIZE
+    $UNSERIALIZE,
+    $NEW_SINK,
 );
