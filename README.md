@@ -6,6 +6,23 @@
 
 一款基于污点分析的PHP扫描工具，能快速匹配从常见Source点如$_POST、$GET到Sink点system等的路径，同时支持单独对函数的扫描。
 
+## 更新日志
+
+**2025/02/18**
+
+开源
+
+**2025/03/31**
+
+更新至v1.1
+
+- 将分支的上限设置为100，超过100会返回为空，防止扫大型项目时会显示扫描失败
+- 优化了if的解析逻辑
+- 补充了对foreach的解析
+- 对通过dirty_func扫描得到的新sink点做了集中显示，方便添加![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181908-31-3-.png)![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331182347-31-4.png)
+- 修改了传播逻辑，现在只从source开始进行传播，大幅度提高了扫描速度，对于同一个项目，文件分析功能耗时只有原来的三分之一，脏函数扫描耗时降低到原来的二分之一![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181431-31-1.png)![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181454-31-2.png)
+- 优化Details的UI，当代码过多时会启用垂直滚动条![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331182929-31-5.png)
+
 ## 运行方法
 
 环境：PHP 7
