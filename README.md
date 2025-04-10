@@ -8,11 +8,11 @@
 
 ## 更新日志
 
-**2025/02/18**
+### **2025/02/18**
 
 开源
 
-**2025/03/31**
+### **2025/03/31**
 
 更新至v1.1
 
@@ -23,6 +23,12 @@
 - 修改了传播逻辑，现在只从source开始进行传播，大幅度提高了扫描速度，对于同一个项目，文件分析功能耗时只有原来的三分之一，脏函数扫描耗时降低到原来的二分之一![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181431-31-1.png)![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181454-31-2.png)
 - 优化Details的UI，当代码过多时会启用垂直滚动条![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331182929-31-5.png)
 
+### **2025/04/09**
+
+更新至v1.2
+
+- 目前支持方法级的跨文件污点传播，dirty_func能支持跨文件的函数调用的解析，增加函数调用链的显示：![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250409-215608-9-1.png)![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250409-221213-2.png)
+
 ## 运行方法
 
 环境：PHP 7
@@ -32,7 +38,7 @@
 ![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F45.png)
 
 ## 用例
-测试代码在TestProject目录中
+测试代码在TestProject/VulnerabilityTest目录中
 
 ### 分支语句测试
 
@@ -104,7 +110,7 @@ system($age);
 
 ### 污点截断测试
 
-首先我们在Sanitizer中加入PHP中内置的过滤函数addslashes：
+首先我们在Sanitizer.php中加入PHP中内置的过滤函数addslashes：
 
 ![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F28.png)
 
@@ -129,32 +135,64 @@ system($processed_b);
 
 ![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F30.png)
 
-### 用户自定义函数测试
+### 跨文件函数调用
 
-Once again，扫大项目的时候不要加这句解析函数表的代码，但如果是单文件的话倒是无所谓，这里来测试一下单文件，我们把那句代码加回来：
-
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F31.png)
+假设有三个独立的php文件：
 
 ```
 <?php
-
-function test($a)
+//1.php
+function a($c)
 {
-    eval($a);
+    b($c);
 }
-
-$s = $_GET['fushuling'];
-
-test($s);
 ```
 
-其中test函数是一个用户自定义函数，接收参数$a，并在具体语句中使用PHP中可以直接执行代码的危险函数eval函数直接执行了参数$a的值，属于典型的危险函数，其扫描结果如下：
+```
+<?php
+//2.php
+function b($c)
+{
+    c($c, null, null);
+}
+```
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F32.png)
+```
+<?php
+//3.php
+function c($c, $d, $e)
+{
+    system($c);
+}
+```
 
-代码详情如下：
+在1.php、2.php和3.php分别有三个用户自定义函数，而最后的触发点在一个单独的main.php里：
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F33.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-005107-24.png)
+
+这里我们点击函数扫描：
+
+![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-220046-1.png)
+
+可以看到我们扫描出来了三个新Sink：a、b和c，我们点击函数a右边的跳转到调用链按钮就可以跳转到调用链：
+
+![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-220244-2.png)
+
+这三个方框都是可以点的，点了可以显示这个函数自己的传播路径，比如我们点击一下这个a，就能看到他内部的传播路径：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-001433-10.png)
+
+在页面的最下方，有本次扫描得到的所有sink：
+
+![](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-220447-3.png)
+
+我已经按照格式输出好了，你只需要复制之后粘贴到Sink.php即可：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-001643-12.png)
+
+现在再使用文件分析功能，我们就能识别到这个新漏洞了：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-005313-25.png)
 
 ### 真实项目测试
 
@@ -164,15 +202,15 @@ test($s);
 
 这里我们使用文件分析功能
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F34.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F03%2FQQ%E6%88%AA%E5%9B%BE20250331181431-31-1.png)
 
-15.2MB用时6.69秒，速度还可以，这里随便选一个，就选这个admin_wexin.php：
+15.2MB用时1.8秒，速度还可以，这里随便选一个，就选这个admin_wexin.php：
 
 ![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F35.png)
 
 Details代码太多了，这里就节选一下：
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F36.png)
+<img src="https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F36.png" alt="img" style="zoom:50%;" />
 
 可以看到漏洞产生的主要问题是$str使用拼接的方法拼接了污点数据$url、$dpic等的数据，并直接传入了危险函数fwrite，该函数可以向指定文件中写入字符，若被写入的字符可控会对整个服务产生巨大的影响，我们可以在本地搭建环境测试
 
@@ -188,24 +226,46 @@ Details代码太多了，这里就节选一下：
 
 这里我们使用函数扫描功能
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F39.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-002839-14.png)
 
-这里就用时19秒了，慢多了，因为这种项目定义的函数都多，而我们扫函数都是扫两遍，一遍有条件，一遍无条件，所以速度就慢下来了，我们来看这个No condition的编辑_弹幕函数
+用时5.7秒，速度还行，我们往下翻到这个编辑弹幕函数
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F40.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003030-15.png)
 
-可以看到是非常典中典的没过滤参数就直接拼接进SQL语句了
+点击跳转到调用链：
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F41.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003146-16.png)
 
-由于是No condition的，所以也没啥必要二次传播了，去全局搜索一下这个函数
+这几个框框都是可以点的，先点击这个编辑弹幕，可以看到这东西其实就是调用了编辑_弹幕：
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F42.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003231-17.png)
 
-再搜一下这个编辑弹幕
+然后再点开这个编辑_弹幕，可以看到出现漏洞的原因是因为直接拼接了输入执行了sql语句：
 
-![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F43.png)
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003345-18.png)
 
-一眼顶针，SQL注入，跑一下sqlmap
+接着把这些新Sink复制过来，加到Sink.php里：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003513-19.png)
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003601-20.png)
+
+在这个的基础上再使用一次文件分析功能，可以看到完全没有影响性能：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003702-21.png)
+
+现在就可以扫描到因为新sink导致的漏洞：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003814-22.png)
+
+点开第一个，可以看到漏洞出现的原因还是非常典型的，就是因为这个sql查询语句的参数用户可控：
+
+![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FQQ20250410-003913-23.png)
+
+用sqlmap跑一下，简单验证一下漏洞：
 
 ![img](https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F02%2F18%2F44.png)
+
+sql注入，get！
+
+<img src="https://fushuling-1309926051.cos.ap-shanghai.myqcloud.com/2025%2F04%2FC8E18D465DDC8C85E1D27E029449062D.gif" alt="img" style="zoom:50%;" />

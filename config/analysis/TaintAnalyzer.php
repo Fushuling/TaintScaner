@@ -43,8 +43,21 @@ class TaintAnalyzer
             $this->VarAnalyze($i, $quads_set);
             $this->CheckSink($i, $quads_set);
         }
-        //var_dump($this->varMap);
-        //var_dump($this->sinks);
+        // var_dump($this->varMap);
+        // var_dump($this->sinks);
+    }
+
+    // 专用于函数的污点传播
+    public function FuncTaintSpread(&$quads_set, &$func_table)
+    {
+        $this->varMap = [];
+        $this->sinks = [];
+        $this->spread_linenum = [];
+        for ($i = 0; $i < count($quads_set); $i++) {
+            //遍历该控制流中的所有Q_IR
+            $this->VarAnalyze($i, $quads_set); //变量的检验可以复用逻辑
+            $this->CheckFuncSink($i, $quads_set, $func_table);
+        }
     }
 
     public function VarAnalyze($id, $quads_set)
@@ -227,9 +240,12 @@ class TaintAnalyzer
             || $quads_set[$i]->opcode == "Expr_Include" || $quads_set[$i]->opcode == "Expr_Eval"
         ) {
             if ($quads_set[$i]->opcode == "Expr_FuncCall") {
-                $funcName = $quads_set[$i]->operand1->parts[0];
+                if ($quads_set[$i]->operand1 instanceof PhpParser\Node\Name) {
+                    $funcName = $quads_set[$i]->operand1->parts[0];
+                } else {
+                    $funcName = $quads_set[$i]->operand1->name;
+                }
             } elseif ($quads_set[$i]->opcode == "Expr_FuncCall_Internal") {
-
                 if ($quads_set[$i]->operand1 instanceof PhpParser\Node\Name) {
                     $funcName = $quads_set[$i]->operand1->parts[0];
                 } else {
@@ -243,10 +259,8 @@ class TaintAnalyzer
                 $funcName = "eval";
             }
             $taint_symbol = false; // 用于没做特殊处理的一般函数
-            global $UserFuncs;
             //$SinkAll是包含所有sink点的集合
-            if (array_key_exists($funcName, $SinkAll) || $UserFuncs[md5($funcName)]->funcSink == true) {
-
+            if (array_key_exists($funcName, $SinkAll)) {
                 if ($quads_set[$i]->opcode == "Expr_FuncCall") {
                     $argName = "";  //表示一个不存在的方法 函数是另一套处理逻辑
                     $startline = $quads_set[$i]->operand1->getStartLine();
@@ -295,6 +309,137 @@ class TaintAnalyzer
                         $sink->type = $SinkAll[$funcName];
                         $sink->name = $funcName;
                         array_push($this->sinks, $sink);
+                    }
+                }
+            }
+        }
+    }
+    //遇到了自定义函数，则对该自定义函数做一次传播
+    public function dfs($name, &$func_table)
+    {
+        $AstToIrConverter = new AstToIrConverter();
+        $NodeInitVisitor = new NodeInitVisitor();
+        $traverser = new PhpParser\NodeTraverser();
+        $traverser->addVisitor($NodeInitVisitor);
+        $traverser->traverse($func_table[md5($name)]->func_stmt);
+        $nodes = $NodeInitVisitor->getNodes();
+        $AstToIrConverter = new AstToIrConverter();
+        $quads = $AstToIrConverter->FuncParse($nodes, $func_table[md5($name)]->func_param); //返回四元组
+        $flow_graph = new ControlFlowGraph();
+        $flow_graph->FuncProcess($quads, $func_table, $name);
+
+        // var_dump($quads);
+    }
+
+    //对于方法的触发逻辑 要注意 如果遇到自定义函数，需要重新进行传播
+    public function CheckFuncSink($i, &$quads_set, &$func_table)
+    {
+        global $SinkAll; //所有sink点
+        if (
+            $quads_set[$i]->opcode == "Expr_FuncCall" ||
+            $quads_set[$i]->opcode == "Expr_FuncCall_Internal" || $quads_set[$i]->opcode == "Stmt_Echo"
+            || $quads_set[$i]->opcode == "Expr_Include" || $quads_set[$i]->opcode == "Expr_Eval"
+        ) {
+            if ($quads_set[$i]->opcode == "Expr_FuncCall") {
+                if ($quads_set[$i]->operand1 instanceof PhpParser\Node\Name) {
+                    $funcName = $quads_set[$i]->operand1->parts[0];
+                } else {
+                    $funcName = $quads_set[$i]->operand1->name;
+                }
+            } elseif ($quads_set[$i]->opcode == "Expr_FuncCall_Internal") {
+                if ($quads_set[$i]->operand1 instanceof PhpParser\Node\Name) {
+                    $funcName = $quads_set[$i]->operand1->parts[0];
+                } else {
+                    $funcName = $quads_set[$i]->operand1->name;
+                }
+            } elseif ($quads_set[$i]->opcode == "Stmt_Echo") {
+                $funcName = "echo";
+            } elseif ($quads_set[$i]->opcode == "Expr_Include") {
+                $funcName = "include";
+            } elseif ($quads_set[$i]->opcode == "Expr_Eval") {
+                $funcName = "eval";
+            }
+            $taint_symbol = false; // 用于没做特殊处理的一般函数
+            //$SinkAll是包含所有sink点的集合
+            // var_dump($funcName);
+            if (array_key_exists($funcName, $SinkAll)) {
+                if ($quads_set[$i]->opcode == "Expr_FuncCall") {
+                    $argName = "";  //表示一个不存在的方法 函数是另一套处理逻辑
+                    $startline = $quads_set[$i]->operand1->getStartLine();
+                    //$quads_set[$i]->dest指向的是Expr_FuncCall，函数作用域
+                    $taint_symbol = $this->CheckUserParam($quads_set[$i]->dest, $quads_set);
+                    //var_dump($taint_symbol);
+                } elseif ($quads_set[$i]->opcode == "Expr_FuncCall_Internal") {
+                    $argName = "";  //表示一个不存在的方法 函数是另一套处理逻辑
+                    $startline = $quads_set[$i]->operand1->getStartLine();
+                    //$quads_set[$i]->dest指向的是Expr_FuncCall_Internal，函数作用域
+                    $taint_symbol = $this->CheckInternalParam($quads_set[$i]->dest, $quads_set);
+                } elseif ($quads_set[$i]->opcode == "Stmt_Echo") {
+                    $argName = $quads_set[$i]->operand2->name;
+                    //var_dump($quads_set[$i]);
+
+                    $startline = $quads_set[$i]->operand2->getStartLine();
+                } elseif ($quads_set[$i]->opcode == "Expr_Include") {
+                    //var_dump($quads_set[$i]);
+                    $argName = $quads_set[$i]->operand2->name;
+
+                    $startline = $quads_set[$i]->operand2->getStartLine();
+                } elseif ($quads_set[$i]->opcode == "Expr_Eval") {
+                    //var_dump($quads_set[$i]->operand2->getStartLine());
+                    $argName = $quads_set[$i]->operand2->name;
+
+                    $startline = $quads_set[$i]->operand2->getStartLine();
+                }
+                //用于自定义函数和部分函数的处理
+                if ($taint_symbol == true) {
+                    $sink = new Sink();
+                    $sink->linenum = $this->spread_linenum;
+                    $sink->sink_num = $startline;
+
+                    $sink->type = $SinkAll[$funcName];
+                    $sink->name = $funcName;
+                    array_push($this->sinks, $sink);
+                } //遍历变量表 如果变量名称匹配且污染状态为true（被污染），记录漏洞信息
+                else if (array_key_exists($argName, $this->varMap)) {
+                    // 如果存在，检查对应的 tainted 值
+                    if ($this->varMap[$argName]->tainted == true) {
+                        // 如果 tainted 为 true，创建 Sink 对象并执行相应操作
+                        $sink = new Sink();
+                        $sink->linenum = $this->spread_linenum;
+                        $sink->sink_num = $startline;
+
+                        $sink->type = $SinkAll[$funcName];
+                        $sink->name = $funcName;
+                        array_push($this->sinks, $sink);
+                    }
+                }
+                // 对于系统内置的函数，如果非内置sink，我们就认为他是无危害的，但是对
+                // 于用户自定义函数我们就不能这么简单的判断，还需要对这个用户函数再进行传播，继续判断
+            } else if ($quads_set[$i]->opcode == "Expr_FuncCall" && array_key_exists(md5($funcName), $func_table)) {
+                // var_dump('now is :', $funcName);
+                $argName = "";
+                $startline = $quads_set[$i]->operand1->getStartLine();
+                $taint_symbol = $this->CheckUserParam($quads_set[$i]->dest, $quads_set);
+                if ($taint_symbol == true) {
+                    //标记为in或者false 都视作非污点数据
+                    if ($func_table[md5($funcName)]->flag == 'true') {
+                        $sink = new Sink();
+                        $sink->linenum = $this->spread_linenum;
+                        $sink->sink_num = $startline;
+                        $sink->type = 'UserFunc';
+                        $sink->name = $funcName;
+                        array_push($this->sinks, $sink);
+                        //若是一个未被标记过的，需要进行染色
+                    } else if ($func_table[md5($funcName)]->flag == 'null' && $func_table[md5($funcName)]->func_stmt != null) {
+                        $this->dfs($funcName, $func_table); //染一次色，再来看看是否是污点
+                        if ($func_table[md5($funcName)]->flag == 'true') {
+                            $sink = new Sink();
+                            $sink->linenum = $this->spread_linenum;
+                            $sink->sink_num = $startline;
+                            $sink->name = $funcName;
+                            $sink->type = 'UserFunc';
+                            array_push($this->sinks, $sink);
+                        }
                     }
                 }
             }

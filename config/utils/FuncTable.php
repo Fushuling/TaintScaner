@@ -1,17 +1,23 @@
 <?php
 //处理用户自定义函数
-/*
-对于用户自定义函数的处理：在遍历主代码之前，首先遍历一边所有自定义函数的定义，打上标签，是否是transfer，是否是sink，然后
-其他代码执行到该函数时，查表决定下一步流程；
-*/
-class FuncTable
-{
-    public $funcName;   // 方法名
-    public $funcSink;     // 是否是 sink
 
-    public function __construct($funcName, $funcSink)
+class func_table
+{
+    public $func_name; //方法名
+    public $func_param; //方法的参数
+    public $func_stmt; // 方法内部的声明啥的
+    public $file_path; // 保存文件路径
+    //一共有四种flag： true false in null 
+    //true表示是sink false表示不是sink in表示正在搜索中，不知道具体信息(为了防止成环的) null就是还没遍历过
+    public $flag;
+    public $sink; //保存污点路径
+
+    public function __construct($func_name = null, $func_param = null, $func_stmt = null, $file_path = null, $flag = null)
     {
-        $this->funcName = $funcName;
-        $this->funcSink = $funcSink;
+        $this->func_name = $func_name;
+        $this->func_param = $func_param;
+        $this->func_stmt = $func_stmt;
+        $this->file_path = $file_path; // 将文件路径赋值给类属性
+        $this->flag = $flag;
     }
 }

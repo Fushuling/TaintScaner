@@ -25,7 +25,7 @@ class CFGBuilder
     }
 
     // 创建控制流图
-    public function CreateGraph($BasicBlock)
+    public function CreateGraph(&$BasicBlock)
     {
         $this->Graph = [];
         $this->Graph[$this->Graph_id] = new Graph();

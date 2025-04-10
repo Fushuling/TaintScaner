@@ -35,241 +35,94 @@ class AstToIrConverter
             $nodes = array($nodes);
         }
 
-        //对所有用户函数打标签，在标签的基础上污点传播  跑大项目很可能会崩，建议先扫一遍函数，然后自己加Sink
-        $this->funcs = array();
-        // $this->buildFuncTable($nodes);
-
-        global $UserFuncs;
-        $UserFuncs = $this->funcs;
-        //var_dump($this->funcs);
-
         $this->ResetQuads();
         $this->processStatements($nodes);
 
         return $this->quads;
     }
 
-    //只扫描函数定义
-    public function DirtyFunc($nodes)
+    //专门给方法的解析用的
+    public function FuncParse($nodes, $arg) //$arg是参数，用于对初始污点赋值
     {
         if (!is_array($nodes)) {
             $nodes = array($nodes);
         }
-        $DirtySinkFunc = [];
-        global $SanitizerAll; //所有Sanitizer
 
-        //这是直接定义在主代码里的方法
+        $this->ResetQuads();
+        for ($i = 0; $i < count($arg); $i++) {
+            $this->quadId += 1;
+            $this->quads[$this->quadId] = new Q_IR($this->quadId, "Expr_Assign", null, "Tainted", $arg[$i]);
+            $this->sourceFlag = true;
+        }
+        $this->processStatements($nodes);
+
+        return $this->quads;
+    }
+
+    //构建全局函数表
+    public function build_funcTable($nodes, $file_path)
+    {
+        if (!is_array($nodes)) {
+            $nodes = [$nodes];
+        }
+
         foreach ($nodes as $node) {
-            if ($node instanceof PhpParser\Node\Stmt\Function_) { //若节点是方法
-                $funcName = $node->name;  //方法名
-                //排除Sanitizer
-                if (!in_array($funcName, $SanitizerAll)) {
-                    $this->DirtyUserFuncParse($node, $DirtySinkFunc);
-                }
-            }
-            if ($node instanceof PhpParser\Node\Stmt\Class_) {
-                $this->DirtyClassFuncParse($node->stmts, $DirtySinkFunc);
-            }
-        }
-        // var_dump($DirtySinkFunc);
-        return $DirtySinkFunc;
-    }
-
-    //扫两轮，第一轮不标记，直接在方法内部传播，无条件；第二轮把函数传入的参数全部标记为污点再传播，有条件
-    public function DirtyUserFuncParse($node, &$DirtySinkFunc)
-    {
-        //第一轮传播
-        $this->ResetQuads();
-        $funcName = $node->name->name;  //方法名
-        $funcStmt = $node->stmts; //statement
-
-        $this->processStatements($funcStmt);
-        $flow_graph = new ControlFlowGraph();
-        $flow_graph->process($this->quads);
-        $sinkNow = $flow_graph->sinks;
-        for ($i = 0; $i < count($sinkNow); $i++) {
-            // var_dump($sinkNow[$i]);
-            $type = $sinkNow[$i]->type;
-            $name = $sinkNow[$i]->name;
-            $linenum = $sinkNow[$i]->linenum;
-            $sink_num = $sinkNow[$i]->sink_num;
-            // var_dump($type, $name, $linenum, $sink_num);
-            //有条件触发
-            $sinkFunc = new FuncSink($type, $name, $funcName, $linenum, $sink_num, "No");
-            // var_dump($sinkFunc);
-            array_push($DirtySinkFunc, $sinkFunc);
-        }
-
-        //第二轮传播
-        $this->ResetQuads();
-        $funcParam = $node->params; //函数定义中的所有参数，全部处理成污点
-        for ($i = 0; $i < count($funcParam); $i++) {
-            if ($funcParam[$i]->var instanceof PhpParser\Node\Expr\Variable) {
-                $this->quadId += 1;
-                $this->quads[$this->quadId] = new Q_IR($this->quadId, "Expr_Assign", null, "Tainted", $funcParam[$i]->var);
-                $this->sourceFlag = true;
-            }
-        }
-        $this->processStatements($funcStmt);
-        $flow_graph = new ControlFlowGraph();
-        $flow_graph->process($this->quads);
-        $sinkNow = $flow_graph->sinks;
-        for ($i = 0; $i < count($sinkNow); $i++) {
-            // var_dump($sinkNow[$i]);
-            $type = $sinkNow[$i]->type;
-            $name = $sinkNow[$i]->name;
-            $linenum = $sinkNow[$i]->linenum;
-            $sink_num = $sinkNow[$i]->sink_num;
-            // var_dump($type, $name, $linenum, $sink_num);
-            //有条件触发
-            $sinkFunc = new FuncSink($type, $name, $funcName, $linenum, $sink_num, "Yes");
-            // var_dump($sinkFunc);
-            array_push($DirtySinkFunc, $sinkFunc);
-        }
-    }
-
-    //类里的函数
-    public function DirtyClassFuncParse($node, &$DirtySinkFunc)
-    {
-        // 遍历每个节点
-        foreach ($node as $classNode) {
-            if ($classNode instanceof PhpParser\Node\Stmt\ClassMethod) {
-                // 重置四元组并处理方法语句
-                $this->ResetQuads();
-                $funcName = $classNode->name->name;
-                $funcStmt = $classNode->stmts; // 方法体
-                $this->processStatements($funcStmt);
-
-                // 创建控制流图并处理污点
-                $flow_graph = new ControlFlowGraph();
-                $flow_graph->process($this->quads);
-                $sinkNow = $flow_graph->sinks;
-                foreach ($sinkNow as $sink) {
-                    // 获取sink信息
-                    $type = $sink->type;
-                    $name = $sink->name;
-                    $linenum = $sink->linenum;
-                    $sink_num = $sink->sink_num;
-                    // 创建一个FuncSink对象并推入数组
-                    $sinkFunc = new FuncSink($type, $name, $funcName, $linenum, $sink_num, "No");
-                    array_push($DirtySinkFunc, $sinkFunc);
-                }
-
-                // 第二轮传播，标记函数参数为污点
-                $this->ResetQuads();
-                $funcParam = $classNode->params;
-                foreach ($funcParam as $param) {
+            if ($node instanceof PhpParser\Node\Stmt\Function_) {
+                // var_dump($node);
+                $func_name = $node->name->name;
+                $func_param = array();
+                foreach ($node->params as $param) {
                     if ($param->var instanceof PhpParser\Node\Expr\Variable) {
-                        $this->quadId += 1;
-                        $this->quads[$this->quadId] = new Q_IR($this->quadId, "Expr_Assign", null, "Tainted", $param->var);
-                        $this->sourceFlag = true;
+                        array_push($func_param, $param->var);
                     }
                 }
+                // $func_arg = $node->name;
+                $func_stmt = $node->stmts;
+                $hash = md5($func_name);
 
-                // 处理方法体语句
-                $this->processStatements($funcStmt);
+                // 获取绝对路径并统一分隔符为 '/'
+                $absolute_path = realpath($file_path); // 获取绝对路径
+                $normalized_path = str_replace("\\", "/", $absolute_path); // 替换反斜杠为斜杠
 
-                // 再次创建控制流图并处理污点
-                $flow_graph = new ControlFlowGraph();
-                $flow_graph->process($this->quads);
-                $sinkNow = $flow_graph->sinks;
-                foreach ($sinkNow as $sink) {
-                    // 获取sink信息
-                    $type = $sink->type;
-                    $name = $sink->name;
-                    $linenum = $sink->linenum;
-                    $sink_num = $sink->sink_num;
-                    // 创建一个FuncSink对象并推入数组
-                    $sinkFunc = new FuncSink($type, $name, $funcName, $linenum, $sink_num, "Yes");
-                    array_push($DirtySinkFunc, $sinkFunc);
+                // 将函数信息加入funcs表，传入文件路径
+                if (!isset($this->funcs[$hash])) {
+                    $this->funcs[$hash] = new func_table(
+                        $func_name,
+                        $func_param,
+                        $func_stmt,
+                        $normalized_path, // 使用绝对路径并统一分隔符
+                        'null'
+                    );
                 }
-            }
-        }
-    }
-
-
-    public function buildFuncTable($nodes)
-    {
-        global $SanitizerAll; //所有Sanitizer
-        //创建函数表
-        if (!is_array($nodes)) {
-            $nodes = array($nodes);
-        }
-
-        //这是直接定义在主代码里的方法
-        foreach ($nodes as $node) {
-            if ($node instanceof PhpParser\Node\Stmt\Function_) { //若节点是方法
-                $funcName = $node->name;  //方法名
-                //排除Sanitizer
-                if (!in_array($funcName, $SanitizerAll)) {
-                    $this->UserFuncParse($node);
-                }
-            }
-            if ($node instanceof PhpParser\Node\Stmt\Class_) {
-                $this->ClassFuncParse($node->stmts);
-            }
-        }
-    }
-
-    //定义在类里的函数
-    public function ClassFuncParse($node)
-    {
-        // var_dump($node);
-        for ($i = 0; $i < count($node); $i++) {
-            if ($node[$i] instanceof PhpParser\Node\Stmt\ClassMethod) {
-                $this->ResetQuads();
-                // var_dump($node[$i]);
-                $funcName = $node[$i]->name->name;
-                $funcParam = $node[$i]->params;
-                for ($j = 0; $j < count($funcParam); $j++) {
-                    if ($funcParam[$j]->var instanceof PhpParser\Node\Expr\Variable) {
-                        $this->quadId += 1;
-                        $this->quads[$this->quadId] = new Q_IR($this->quadId, "Expr_Assign", null, "Tainted", $funcParam[$j]->var);
-                        $this->sourceFlag = true;
+            } else if ($node instanceof PhpParser\Node\Stmt\Class_) {
+                foreach ($node->stmts as $classNode) {
+                    if ($classNode instanceof PhpParser\Node\Stmt\ClassMethod) {
+                        $func_name = $classNode->name->name;
+                        $func_stmt = $classNode->stmts; // 方法体
+                        $hash = md5($func_name);
+                        $func_param = array();
+                        $funcParam = $classNode->params;
+                        foreach ($funcParam as $param) {
+                            if ($param->var instanceof PhpParser\Node\Expr\Variable) {
+                                array_push($func_param, $param->var);
+                            }
+                        }
+                        // 获取绝对路径并统一分隔符为 '/'
+                        $absolute_path = realpath($file_path); // 获取绝对路径
+                        $normalized_path = str_replace("\\", "/", $absolute_path); // 替换反斜杠为斜杠
+                        if (!isset($this->funcs[$hash])) {
+                            $this->funcs[$hash] = new func_table(
+                                $func_name,
+                                $func_param,
+                                $func_stmt,
+                                $normalized_path, // 使用绝对路径并统一分隔符
+                                'null'
+                            );
+                        }
                     }
                 }
-                $funcStmt = $node[$i]->stmts; //statement
-                $hash = md5($funcName); //用哈希唯一的标识一个函数
-                $this->processStatements($funcStmt);
-
-                $flow_graph = new ControlFlowGraph();
-                $flow_graph->process($this->quads);
-
-                // var_dump($this->quads);
-                if ($flow_graph->sinks != null) {
-                    $this->funcSink = true;
-                }
-                // var_dump($funcName, $this->funcSink);
-
-                $this->funcs[$hash] = new FuncTable($funcName, $this->funcSink);
             }
         }
-    }
-
-    //解析用户函数并打标签
-    public function UserFuncParse($node)
-    {
-        $this->ResetQuads();
-        $funcName = $node->name->name;  //方法名
-        $funcParam = $node->params; //函数定义中的所有参数，全部处理成污点
-        for ($i = 0; $i < count($funcParam); $i++) {
-            if ($funcParam[$i]->var instanceof PhpParser\Node\Expr\Variable) {
-                $this->quadId += 1;
-                $this->quads[$this->quadId] = new Q_IR($this->quadId, "Expr_Assign", null, "Tainted", $funcParam[$i]->var);
-                $this->sourceFlag = true;
-            }
-        }
-        $funcStmt = $node->stmts; //statement
-        $hash = md5($funcName); //用哈希唯一的标识一个函数
-        $this->processStatements($funcStmt);
-
-        $flow_graph = new ControlFlowGraph();
-        $flow_graph->process($this->quads);
-        if ($flow_graph->sinks != null) {
-            $this->funcSink = true;
-        }
-
-        $this->funcs[$hash] = new FuncTable($funcName, $this->funcSink);
     }
 
     //重置quad
@@ -654,7 +507,26 @@ class AstToIrConverter
             } elseif ($expr->expr instanceof PhpParser\Node\Expr\Variable) {
                 //若为变量，则右操作数为当前QuadId
                 $this->GenerateQuads($this->quadId, $expr->getType(), null, $expr->expr, $expr->var);
-            } elseif ($expr->expr instanceof PhpParser\Node\Expr) {
+            } //三元表达式，比如$cid = $_POST['cid'] ?: showmessage(-1, null);
+            else if ($expr->expr instanceof PhpParser\Node\Expr\Ternary) {
+                if ($expr->expr->cond instanceof PhpParser\Node\Expr\Variable) {
+                    $this->GenerateQuads($this->quadId, $expr->getType(), null, $expr->expr->cond, $expr->var);
+                } else if ($expr->expr->cond instanceof PhpParser\Node\Expr) {
+                    $before_id = $this->quadId;
+                    $this->ExprParse($expr->expr->cond); //若为表达式，对$expr->expr进行一次解析
+                    $now_id = $this->quadId;
+                    if ($before_id != $now_id) { //减枝
+                        $this->GenerateQuads($this->quadId, $expr->getType(), null, $now_id, $expr->var);
+                    } else {
+                        $this->GenerateQuads($this->quadId, $expr->getType(), null, null, $expr->var);
+                    }
+                } else {
+                    $this->GenerateQuads($this->quadId, $expr->getType(), null, null, $expr->var);
+                }
+                //上面解析了等式，下面需要解析两个分支
+                //不想写了
+            } //对于普通的表达式，赋值得到的是表达式解析结果的最后一条ir 
+            elseif ($expr->expr instanceof PhpParser\Node\Expr) {
                 //var_dump($expr->expr);
                 $before_id = $this->quadId;
                 $this->ExprParse($expr->expr); //若为表达式，对$expr->expr进行一次解析
@@ -700,32 +572,53 @@ class AstToIrConverter
             $this->GenerateQuads($this->quadId, $expr->getType(), null, null, null);
         }
 
-        //类的函数调用  暂时按照内置函数的逻辑处理
+        //类的函数调用  暂时按照内置函数的逻辑处理 类似于$conn->query($cid);
         if ($expr instanceof PhpParser\Node\Expr\MethodCall) {
 
             if ($expr->name instanceof PhpParser\Node\Identifier) {
-                global $SinkAll;
-                if (array_key_exists($expr->name->name, $SinkAll)) {
-                    //var_dump($expr->name->name);
-                    $param_count = count($expr->args);
-                    $start_id = $this->quadId + 1;
-                    for ($i = 0; $i < $param_count; $i++) {
-                        //调用的时候传入的参数
-                        $this->GenerateQuads($this->quadId, "Internal_Call_Param", null, null, $expr->args[$i]);
-                    }
-                    $this->GenerateQuads($this->quadId, "Expr_FuncCall_Internal", $expr->name, null, null);
-                    $id = $this->quadId;
-                    $this->quads[$id]->dest = $this->quadId + 1;
-                    $end_id = $this->quadId;
-                    $this->GenerateQuads($this->quadId, "Expr_FuncCall_Internal_Finish", $start_id, $end_id, null);
+                // global $SinkAll;
+                // if (array_key_exists($expr->name->name, $SinkAll)) {
+                //var_dump($expr->name->name);
+                $param_count = count($expr->args);
+                $start_id = $this->quadId + 1;
+                for ($i = 0; $i < $param_count; $i++) {
+                    //调用的时候传入的参数
+                    $this->GenerateQuads($this->quadId, "UserFunc_Call_Param", null, null, $expr->args[$i]);
                 }
+                $this->GenerateQuads($this->quadId, "Expr_FuncCall", $expr->name, null, null);
+                $id = $this->quadId;
+                $this->quads[$id]->dest = $this->quadId + 1;
+                $end_id = $this->quadId;
+                $this->GenerateQuads($this->quadId, "Expr_FuncCall_Finish", $start_id, $end_id, null);
+                // }
             }
+        }
+
+        //类似于sql::编辑_弹幕($cid);
+        if ($expr instanceof PhpParser\Node\Expr\StaticCall) {
+            if ($expr->name instanceof PhpParser\Node\Identifier) {
+                // global $SinkAll;
+                // if (array_key_exists($expr->name->name, $SinkAll)) {
+                //var_dump($expr->name->name);
+                $param_count = count($expr->args);
+                $start_id = $this->quadId + 1;
+                for ($i = 0; $i < $param_count; $i++) {
+                    //调用的时候传入的参数
+                    $this->GenerateQuads($this->quadId, "UserFunc_Call_Param", null, null, $expr->args[$i]);
+                }
+                $this->GenerateQuads($this->quadId, "Expr_FuncCall", $expr->name, null, null);
+                $id = $this->quadId;
+                $this->quads[$id]->dest = $this->quadId + 1;
+                $end_id = $this->quadId;
+                $this->GenerateQuads($this->quadId, "Expr_FuncCall_Finish", $start_id, $end_id, null);
+            }
+            // }
         }
 
         //若为函数调用
         if ($expr instanceof PhpParser\Node\Expr\FuncCall) {
-
             if ($expr->name instanceof PhpParser\Node\Name) {
+                // var_dump($expr->name);
                 //用户内置函数
                 if (in_array($expr->name->parts[0], get_defined_functions()["internal"])) { {
                         global $SanitizerAll;
@@ -759,7 +652,7 @@ class AstToIrConverter
                         $this->GenerateQuads($this->quadId, "UserFunc_Call_Param", null, null, $expr->args[$i]);
                     }
                     //{"Expr_FuncCall",方法名,null，null}
-                    $this->GenerateQuads($this->quadId, $expr->getType(), $expr->name, null, null);
+                    $this->GenerateQuads($this->quadId, "Expr_FuncCall", $expr->name, null, null);
                     $id = $this->quadId;
                     $this->quads[$id]->dest = $this->quadId + 1;
                     $end_id = $this->quadId;

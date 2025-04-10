@@ -82,7 +82,6 @@ $SQL = array(
     'mysql_query'     => 'SQLI',
     'mysqli_query'    => 'SQLI',
     'query'  => 'SQLI',
-    '编辑弹幕' => 'SQLI',
 );
 
 // php反序列化
@@ -100,5 +99,6 @@ $SinkAll = array_merge(
     $EXEC,
     $INCLUDE,
     $CODE,
-    $UNSERIALIZE
+    $UNSERIALIZE,
+    $NEW_SINK,
 );

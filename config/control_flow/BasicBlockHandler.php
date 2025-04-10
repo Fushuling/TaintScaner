@@ -19,7 +19,7 @@ class BasicBlockHandler
         $this->BasicBlock = [];
     }
     //划分基本块的逻辑
-    public function BlockDivide($quads)
+    public function BlockDivide(&$quads)
     {
         /*
         InEdge设为$quads[1](quads[0]没有东西)
@@ -32,7 +32,7 @@ class BasicBlockHandler
 
         $quad_id = count($quads); //quad总数
 
-        $max_branch = 100; //如果控制流分支数量超过100会跑崩 因此现在限制最多为100 超过100返回空
+        $max_branch = 60; //如果控制流分支数量超过100会跑崩 因此现在限制最多为100 超过100返回空
         $now_branch = 0;
 
         //遍历每一个quad

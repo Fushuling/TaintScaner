@@ -3,38 +3,31 @@ require 'global.php';
 ini_set('display_errors', 0); // 禁用错误输出
 error_reporting(E_ERROR | E_PARSE); // 仅显示致命错误和解析错误
 
-// 递归扫描目录，获取所有 PHP 文件路径
 function scanDirectory($dir)
 {
     $phpFiles = [];
-    $frameworks = [];  // 用于存储框架信息
+    $frameworks = [];
     try {
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir));
         foreach ($iterator as $file) {
             if ($file->isFile() && pathinfo($file, PATHINFO_EXTENSION) === 'php') {
                 $phpFiles[] = $file->getRealPath();
             }
-            // 检查是否有特定的框架文件
-            if ($file->isFile()) {
-                $filename = strtolower($file->getFilename());
-                if (strpos($filename, 'psrserverrequestresolver.php') !== false && !in_array('Symfony', $frameworks)) {
-                    $frameworks[] = 'Symfony';
-                }
-                if (strpos($filename, 'think') !== false && !in_array('ThinkPHP', $frameworks)) {
-                    $frameworks[] = 'ThinkPHP';
-                }
-                // 检查Laravel框架，只添加一次
-                if (strpos($filename, 'welcome.blade.php') !== false && !in_array('Laravel', $frameworks)) {
-                    $frameworks[] = 'Laravel';
-                }
-                // 检查Yii框架，只添加一次
-                if (strpos($filename, 'yii') !== false && !in_array('Yii', $frameworks)) {
-                    $frameworks[] = 'Yii';
-                }
-                // 检查CakePHP框架，只添加一次
-                if (strpos($filename, 'dev_error_stacktrace.php') !== false && !in_array('CakePHP', $frameworks)) {
-                    $frameworks[] = 'CakePHP';
-                }
+            $filename = strtolower($file->getFilename());
+            if (strpos($filename, 'psrserverrequestresolver.php') !== false && !in_array('Symfony', $frameworks)) {
+                $frameworks[] = 'Symfony';
+            }
+            if (strpos($filename, 'think') !== false && !in_array('ThinkPHP', $frameworks)) {
+                $frameworks[] = 'ThinkPHP';
+            }
+            if (strpos($filename, 'welcome.blade.php') !== false && !in_array('Laravel', $frameworks)) {
+                $frameworks[] = 'Laravel';
+            }
+            if (strpos($filename, 'yii') !== false && !in_array('Yii', $frameworks)) {
+                $frameworks[] = 'Yii';
+            }
+            if (strpos($filename, 'dev_error_stacktrace.php') !== false && !in_array('CakePHP', $frameworks)) {
+                $frameworks[] = 'CakePHP';
             }
         }
     } catch (Exception $e) {
@@ -43,133 +36,116 @@ function scanDirectory($dir)
     return ['phpFiles' => $phpFiles, 'frameworks' => $frameworks];
 }
 
-// 处理目录扫描
 function handleDirectoryScan($dir)
 {
     $scanResult = scanDirectory($dir);
     $phpFiles = $scanResult['phpFiles'];
-    $frameworks = $scanResult['frameworks'];  // 获取框架信息
-    $results = [];
+    $frameworks = $scanResult['frameworks'];
 
-    foreach ($phpFiles as $index => $file) {
-        $result = loadFile($file, $index);
+    $parser = new PhpParser\Parser\Php7(new PhpParser\Lexer\Emulative());
+    $traverser = new PhpParser\NodeTraverser();
+    $NodeInitVisitor = new NodeInitVisitor();
+    $traverser->addVisitor($NodeInitVisitor);
+    $AstToIrConverter = new AstToIrConverter();
 
-        // 仅在解析成功或发生错误时添加结果
-        if ($result !== null) {
-            $results[] = $result;
+    foreach ($phpFiles as $filePath) {
+        try {
+            $code = file_get_contents($filePath);
+            $code = preg_replace('/\belse\s+if\b/', 'elseif', $code);
+            $parseResult = $parser->parse($code);
+
+            $NodeInitVisitor = new NodeInitVisitor();
+            $traverser->removeVisitor($NodeInitVisitor);
+            $traverser->addVisitor($NodeInitVisitor);
+            $traverser->traverse($parseResult);
+
+            $nodes = $NodeInitVisitor->getNodes();
+            $AstToIrConverter->build_funcTable($nodes, $filePath);
+        } catch (Throwable $e) {
+            echo "[Error] Failed to parse file: $filePath\n";
+            echo "Reason: " . $e->getMessage() . "\n\n";
         }
     }
 
-    // 获取symbol为Yes的函数列表
-    $symbolFunctions = getSymbolFunctions($results);
+    $func_table = $AstToIrConverter->funcs;
 
+    foreach ($func_table as $key => $obj) {
+        if ($obj->flag == 'null') {
+            if ($func_table[md5($obj->func_name)]->func_stmt != null) {
+                try {
+                    $AstToIrConverter = new AstToIrConverter();
+                    $NodeInitVisitor = new NodeInitVisitor();
+                    $traverser = new PhpParser\NodeTraverser();
+                    $traverser->addVisitor($NodeInitVisitor);
+                    $traverser->traverse($func_table[md5($obj->func_name)]->func_stmt);
+                    $nodes = $NodeInitVisitor->getNodes();
+                    $quads = $AstToIrConverter->FuncParse($nodes, $func_table[md5($obj->func_name)]->func_param);
+                    $flow_graph = new ControlFlowGraph();
+                    $flow_graph->FuncProcess($quads, $func_table, $obj->func_name);
+                } catch (Exception $e) {
+                    error_log("DFS 错误: {$obj->func_name}: {$e->getMessage()}");
+                }
+            } else {
+                $obj->flag == 'false;';
+            }
+        }
+    }
+
+    $results = [];
+    $symbolFunctions = [];
+
+    foreach ($func_table as $key => $obj) {
+        if ($obj->flag == 'true') {
+            foreach ($obj->sink as $sink) {
+                $symbolFunctions[$obj->func_name] = "'" . $obj->func_name . "'" . ' => ' . "'" . $sink->type . "'" . ',';
+                $results[] = [
+                    'funcName' => $obj->func_name,
+                    'type' => $sink->type,
+                    'name' => $sink->name,
+                    'linenum' => $sink->sink_num,
+                    'path' => $obj->file_path,
+                    'code' => getHighlightedCode($obj->file_path, $sink)
+                ];
+            }
+        }
+    }
     return [
-        'results' => $results,
+        'results' => formatResults($results),
         'frameworks' => count($frameworks) > 0 ? "检测到框架： " . implode(', ', $frameworks) : "未检测到框架。",
-        'symbolFunctions' => $symbolFunctions, // 返回symbol为Yes的函数
+        'symbolFunctions' => array_values($symbolFunctions)
     ];
 }
 
-// 加载并解析单个文件
-function loadFile($filePath, $fileIndex)
+function getHighlightedCode($path, $sink)
 {
-    // var_dump($filePath);
-    try {
-        $parser = new PhpParser\Parser\Php7(new PhpParser\Lexer\Emulative());
-
-        $code = file_get_contents($filePath);
-        $code = preg_replace('/\belse\s+if\b/', 'elseif', $code);
-        $parseResult = $parser->parse($code); // AST
-
-        $NodeInitVisitor = new NodeInitVisitor();
-        $traverser = new PhpParser\NodeTraverser();
-        $traverser->addVisitor($NodeInitVisitor);
-        $traverser->traverse($parseResult);
-
-        $nodes = $NodeInitVisitor->getNodes();
-        $AstToIrConverter = new AstToIrConverter();
-        $resultSet = $AstToIrConverter->DirtyFunc($nodes);
-
-        // 如果没有发现漏洞，直接跳过
-        if (empty($resultSet)) {
-            return null; // 不返回任何信息
+    $code = file($path, FILE_IGNORE_NEW_LINES);
+    $lines = [];
+    foreach ($code as $i => $line) {
+        $linenum = $i + 1;
+        $escaped = htmlspecialchars($line, ENT_QUOTES, 'UTF-8');
+        if ($linenum == $sink->sink_num) {
+            $lines[] = "<span style='color: red; font-weight: bold;'>{$linenum} {$escaped}</span>";
+        } elseif (in_array($linenum, $sink->linenum)) {
+            $lines[] = "<span style='color: orange; font-weight: bold;'>{$linenum} {$escaped}</span>";
+        } else {
+            $lines[] = "{$linenum} {$escaped}";
         }
-
-        $htmlResult = parseResult($resultSet, $filePath, $fileIndex);
-
-        return [
-            'status' => 'success',
-            'details' => $htmlResult['details'],
-            'functions' => $htmlResult['functions'], // 返回函数信息
-        ];
-    } catch (Exception $e) {
-        // 捕获异常并返回错误信息
-        return [
-            'status' => 'error',
-            'type' => 'ParseError',
-            'message' => '解析错误: ' . $e->getMessage(),
-        ];
     }
+    return implode("\n", $lines);
 }
 
-function parseResult($resultSet, $filePath, $fileIndex)
+function formatResults($info)
 {
-    $count = [];
-    $info = [];
-    $num = 0;
-    $functions = [];
-
-    // 读取整个文件的代码
-    $code = file($filePath, FILE_IGNORE_NEW_LINES);
-
-    foreach ($resultSet as $result) {
-        $count[$result->type] = ($count[$result->type] ?? 0) + 1;
-
-        $lineContext = [];
-        for ($i = 0; $i < count($code); $i++) {
-            $tmp = $i + 1;
-            $escapedCode = htmlspecialchars($code[$i], ENT_QUOTES, 'UTF-8');
-
-            if ($tmp == $result->sink_num) {
-                $lineContext[] = "<span style='color: red; font-weight: bold;'>" . $tmp . " " . $escapedCode . "</span>";
-            } else if (in_array($tmp, $result->linenum)) {
-                $lineContext[] = "<span style='color: orange; font-weight: bold;'>" . $tmp . " " . $escapedCode . "</span>";
-            } else {
-                $lineContext[] = $tmp . " " . $escapedCode;
-            }
-        }
-
-        $info[] = [
-            "type" => $result->type,
-            "name" => $result->name,
-            "funcName" => $result->funcName,
-            "path" => $filePath,
-            "code" => implode("\n", $lineContext),
-            "linenum" => $result->sink_num,
-            "symbol" => $result->symbol
-        ];
-        $num++;
-
-        // 保存函数信息
-        $functions[] = [
-            'name' => $result->funcName,
-            'type' => $result->type,
-            'symbol' => $result->symbol
-        ];
-    }
-
-    // 构建 HTML 表格
     $detailsHtml = '<table class="table"><thead><tr>
-        <th>#</th><th>SinkFunc</th><th>Type</th><th>Function</th><th>Condition</th><th>Line</th><th>Path</th><th>Detail</th>
+        <th>#</th><th>SinkFunc</th><th>Type</th><th>Function</th><th>Line</th><th>Path</th><th>Detail</th>
         </tr></thead><tbody>';
     foreach ($info as $index => $item) {
-        $modalId = "modal-{$fileIndex}-{$index}";
+        $modalId = "modal-{$index}";
         $detailsHtml .= "<tr>
             <td>" . ($index + 1) . "</td>
             <td>{$item['funcName']}</td>
             <td>{$item['type']}</td>
             <td>{$item['name']}</td>
-            <td>{$item['symbol']}</td>
             <td>{$item['linenum']}</td>
             <td>{$item['path']}</td>
             <td>
@@ -191,61 +167,113 @@ function parseResult($resultSet, $filePath, $fileIndex)
         </tr>";
     }
     $detailsHtml .= '</tbody></table>';
-
-    return [
-        'details' => $detailsHtml,
-        'functions' => $functions, // 返回函数信息
-    ];
+    return $detailsHtml;
 }
 
-// 获取symbol为Yes的函数列表
-function getSymbolFunctions($results)
+function handleSingleFile($filePath)
 {
-    $symbolFunctions = [];
+    $frameworks = [];
+    $phpFiles = [$filePath];
 
-    foreach ($results as $result) {
-        if (isset($result['functions']) && is_array($result['functions'])) {
-            foreach ($result['functions'] as $function) {
-                if (isset($function['symbol']) && $function['symbol'] === 'Yes') {
-                    // 通过函数名去重
-                    $symbolFunctions[$function['name']] = "'" . $function['name'] . "'" . ' => ' . "'" . $function['type'] . "'" . ',';
+    $parser = new PhpParser\Parser\Php7(new PhpParser\Lexer\Emulative());
+    $traverser = new PhpParser\NodeTraverser();
+    $NodeInitVisitor = new NodeInitVisitor();
+    $traverser->addVisitor($NodeInitVisitor);
+    $AstToIrConverter = new AstToIrConverter();
+
+    foreach ($phpFiles as $filePath) {
+        $code = file_get_contents($filePath);
+        $code = preg_replace('/\belse\s+if\b/', 'elseif', $code);
+        $parseResult = $parser->parse($code);
+
+        $NodeInitVisitor = new NodeInitVisitor();
+        $traverser->removeVisitor($NodeInitVisitor);
+        $traverser->addVisitor($NodeInitVisitor);
+        $traverser->traverse($parseResult);
+
+        $nodes = $NodeInitVisitor->getNodes();
+        $AstToIrConverter->build_funcTable($nodes, $filePath);
+    }
+
+    $func_table = $AstToIrConverter->funcs;
+
+    foreach ($func_table as $key => $obj) {
+        if ($obj->flag == 'null') {
+            if ($func_table[md5($obj->func_name)]->func_stmt != null) {
+                try {
+                    $AstToIrConverter = new AstToIrConverter();
+                    $NodeInitVisitor = new NodeInitVisitor();
+                    $traverser = new PhpParser\NodeTraverser();
+                    $traverser->addVisitor($NodeInitVisitor);
+                    $traverser->traverse($func_table[md5($obj->func_name)]->func_stmt);
+                    $nodes = $NodeInitVisitor->getNodes();
+                    $quads = $AstToIrConverter->FuncParse($nodes, $func_table[md5($obj->func_name)]->func_param);
+                    $flow_graph = new ControlFlowGraph();
+                    $flow_graph->FuncProcess($quads, $func_table, $obj->func_name);
+                } catch (Exception $e) {
+                    error_log("DFS 错误: {$obj->func_name}: {$e->getMessage()}");
                 }
+            } else {
+                $obj->flag == 'false;';
             }
         }
     }
 
-    // 重新索引数组，确保结果是一个普通的数组
-    return array_values($symbolFunctions);  // 去重后的结果
+    $results = [];
+    $symbolFunctions = [];
+
+    foreach ($func_table as $key => $obj) {
+        if ($obj->flag == 'true') {
+            foreach ($obj->sink as $sink) {
+                $symbolFunctions[$obj->func_name] = "'" . $obj->func_name . "'" . ' => ' . "'" . $sink->type . "'" . ',';
+                $results[] = [
+                    'funcName' => $obj->func_name,
+                    'type' => $sink->type,
+                    'name' => $sink->name,
+                    'linenum' => $sink->sink_num,
+                    'path' => $obj->file_path,
+                    'code' => getHighlightedCode($obj->file_path, $sink)
+                ];
+            }
+        }
+    }
+    return [
+        'results' => formatResults($results),
+        'frameworks' => count($frameworks) > 0 ? "检测到框架： " . implode(', ', $frameworks) : "未检测到框架。",
+        'symbolFunctions' => array_values($symbolFunctions)
+    ];
 }
 
-// 入口处理逻辑
 $inputPath = $_POST['path'] ?? null;
 
-if ($inputPath && is_dir($inputPath)) {
-    $results = handleDirectoryScan($inputPath);
-
-    echo json_encode([
-        'status' => 'success',
-        'frameworks' => $results['frameworks'], // 返回框架信息
-        'results' => $results['results'],
-        'symbolFunctions' => $results['symbolFunctions'], // 返回symbol为Yes的函数
-    ]);
-} elseif ($inputPath && is_file($inputPath)) {
-    $result = loadFile($inputPath, 0);
-
-    // 获取symbol为Yes的函数列表
-    $symbolFunctions = getSymbolFunctions([$result]);
-
-    echo json_encode([
-        'status' => 'success',
-        'frameworks' => '未检测到框架。', // 默认无框架
-        'results' => [$result],
-        'symbolFunctions' => $symbolFunctions, // 返回symbol为Yes的函数
-    ]);
+if ($inputPath) {
+    if (is_dir($inputPath)) {
+        $results = handleDirectoryScan($inputPath);
+        echo json_encode([
+            'status' => 'success',
+            'frameworks' => $results['frameworks'],
+            'results' => [['status' => 'success', 'details' => $results['results']]],
+            'symbolFunctions' => $results['symbolFunctions']
+        ]);
+    } elseif (is_file($inputPath) && pathinfo($inputPath, PATHINFO_EXTENSION) === 'php') {
+        $results = handleSingleFile($inputPath);
+        echo json_encode([
+            'status' => 'success',
+            'frameworks' => $results['frameworks'],
+            'results' => [['status' => 'success', 'details' => $results['results']]],
+            'symbolFunctions' => $results['symbolFunctions']
+        ]);
+    } else {
+        echo json_encode([
+            'status' => 'error',
+            'type' => 'InvalidPath',
+            'message' => '无效路径，请输入有效的PHP文件或目录路径。',
+        ]);
+    }
 } else {
     echo json_encode([
         'status' => 'error',
         'type' => 'InvalidPath',
-        'message' => '无效路径，请检查输入的文件路径。',
+        'message' => '请输入文件或目录路径。',
     ]);
 }

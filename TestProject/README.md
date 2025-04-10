@@ -1,6 +1,6 @@
 VulnerabilityTest目录是一些测试漏洞的代码
 
-ASTmainForTest.php是开发过程中使用的测试代码，可以看到他读取了test.php进行处理，核心逻辑是
+ASTmainForTest.php(用于单文件)和CrossParseTest.php(用于跨文件的函数解析)都是开发过程中使用的测试代码，可以看到他读取了test.php进行处理，核心逻辑是
 
 ```
 var_dump($parseResult); //AST
